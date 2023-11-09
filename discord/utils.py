@@ -1472,18 +1472,25 @@ async def _get_info(session: ClientSession) -> Tuple[Dict[str, Any], str]:
 
 
 async def _get_build_number(session: ClientSession) -> int:  # Thank you Discord-S.C.U.M
-    """Fetches client build number"""
+    """Fetches the Discord client build number."""
+    build_number = 244594  # Default fallback build number
     try:
-        login_page_request = await session.get('https://discord.com/login', timeout=7)
-        login_page = await login_page_request.text()
-        build_url = 'https://discord.com/assets/' + re.compile(r'assets/+([a-z0-9]+)\.js').findall(login_page)[-2] + '.js'
-        build_request = await session.get(build_url, timeout=7)
-        build_file = await build_request.text()
-        build_index = build_file.find('buildNumber') + 24
-        return int(build_file[build_index : build_index + 6])
-    except asyncio.TimeoutError:
-        _log.critical('Could not fetch client build number. Falling back to hardcoded value...')
-        return 9999
+        login_page_response = await session.get('https://discord.com/login', timeout=7)
+        login_page_content = await login_page_response.text()
+        js_file_hashes = re.findall(r'assets/([a-z0-9]+)\.js', login_page_content)
+        for js_hash in js_file_hashes:
+            js_file_response = await session.get(f'https://discord.com/assets/{js_hash}.js', timeout=7)
+            js_file_content = await js_file_response.text()
+            match = re.search(r'buildNumber["\']?\s*:\s*(\d+)', js_file_content)
+            if match:
+                build_number = int(match.group(1))
+                break
+    except asyncio.TimeoutError as e:
+        print(f'Could not fetch client build number due to timeout: {e}')
+    except Exception as e:
+        print(f'An unexpected error occurred while fetching the build number: {e}')
+    finally:
+        return build_number
 
 
 async def _get_user_agent(session: ClientSession) -> str:
