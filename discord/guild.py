@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import copy
 from datetime import datetime
+from operator import attrgetter
 import unicodedata
 from typing import (
     Any,
@@ -99,6 +100,7 @@ from .guild_premium import PremiumGuildSubscription
 from .entitlements import Entitlement
 from .automod import AutoModRule, AutoModTrigger, AutoModRuleAction
 from .partial_emoji import _EmojiTag, PartialEmoji
+from .commands import _command_factory
 
 if TYPE_CHECKING:
     from .abc import Snowflake, SnowflakeTime
@@ -111,7 +113,7 @@ if TYPE_CHECKING:
     from .types.threads import (
         Thread as ThreadPayload,
     )
-    from .types.voice import GuildVoiceState
+    from .types.voice import BaseVoiceState as VoiceStatePayload
     from .permissions import Permissions
     from .channel import VoiceChannel, StageChannel, TextChannel, ForumChannel, CategoryChannel
     from .template import Template
@@ -139,6 +141,7 @@ if TYPE_CHECKING:
     from .types.oauth2 import OAuth2Guild as OAuth2GuildPayload
     from .message import EmojiInputType, Message
     from .read_state import ReadState
+    from .commands import UserCommand, MessageCommand, SlashCommand
 
     VocalGuildChannel = Union[VoiceChannel, StageChannel]
     NonCategoryChannel = Union[VocalGuildChannel, ForumChannel, TextChannel, DirectoryChannel]
@@ -571,7 +574,7 @@ class Guild(Hashable):
         return f'<Guild {inner}>'
 
     def _update_voice_state(
-        self, data: GuildVoiceState, channel_id: Optional[int]
+        self, data: VoiceStatePayload, channel_id: Optional[int]
     ) -> Tuple[Optional[Member], VoiceState, VoiceState]:
         cache_flags = self._state.member_cache_flags
         user_id = int(data['user_id'])
@@ -764,7 +767,7 @@ class Guild(Hashable):
         This is sorted by the position and are in UI order from top to bottom.
         """
         r = [ch for ch in self._channels.values() if isinstance(ch, VoiceChannel)]
-        r.sort(key=lambda c: (c.position, c.id))
+        r.sort(key=attrgetter('position', 'id'))
         return r
 
     @property
@@ -776,7 +779,7 @@ class Guild(Hashable):
         This is sorted by the position and are in UI order from top to bottom.
         """
         r = [ch for ch in self._channels.values() if isinstance(ch, StageChannel)]
-        r.sort(key=lambda c: (c.position, c.id))
+        r.sort(key=attrgetter('position', 'id'))
         return r
 
     @property
@@ -841,7 +844,7 @@ class Guild(Hashable):
         This is sorted by the position and are in UI order from top to bottom.
         """
         r = [ch for ch in self._channels.values() if isinstance(ch, TextChannel)]
-        r.sort(key=lambda c: (c.position, c.id))
+        r.sort(key=attrgetter('position', 'id'))
         return r
 
     @property
@@ -851,7 +854,7 @@ class Guild(Hashable):
         This is sorted by the position and are in UI order from top to bottom.
         """
         r = [ch for ch in self._channels.values() if isinstance(ch, CategoryChannel)]
-        r.sort(key=lambda c: (c.position, c.id))
+        r.sort(key=attrgetter('position', 'id'))
         return r
 
     @property
@@ -863,7 +866,7 @@ class Guild(Hashable):
         .. versionadded:: 2.0
         """
         r = [ch for ch in self._channels.values() if isinstance(ch, ForumChannel)]
-        r.sort(key=lambda c: (c.position, c.id))
+        r.sort(key=attrgetter('position', 'id'))
         return r
 
     @property
@@ -875,7 +878,7 @@ class Guild(Hashable):
         .. versionadded:: 2.1
         """
         r = [ch for ch in self._channels.values() if isinstance(ch, DirectoryChannel)]
-        r.sort(key=lambda c: (c.position, c.id))
+        r.sort(key=attrgetter('position', 'id'))
         return r
 
     @property
@@ -920,7 +923,7 @@ class Guild(Hashable):
         as_list: List[ByCategoryItem] = [(_get(k), v) for k, v in grouped.items()]  # type: ignore
         as_list.sort(key=key)
         for _, channels in as_list:
-            channels.sort(key=lambda c: (c._sorting_bucket, c.position, c.id))
+            channels.sort(key=attrgetter('_sorting_bucket', 'position', 'id'))
         return as_list
 
     def _resolve_channel(self, id: Optional[int], /) -> Optional[Union[GuildChannel, Thread]]:
@@ -1317,7 +1320,7 @@ class Guild(Hashable):
 
     @property
     def application_command_count(self) -> Optional[int]:
-        """Optional[:class:`int`]: Returns the application command count if available.
+        """Optional[:class:`int`]: Returns the application command count, if available.
 
         .. versionadded:: 2.0
         """
@@ -3271,6 +3274,39 @@ class Guild(Hashable):
             return factory(guild=self, data=d)
 
         return [convert(d) for d in data]
+
+    async def application_commands(self) -> List[Union[SlashCommand, UserCommand, MessageCommand]]:
+        """|coro|
+
+        Returns a list of all application commands available in the guild.
+
+        .. versionadded:: 2.1
+
+        .. note::
+
+            Commands that the user does not have permission to use will not be returned.
+
+        Raises
+        -------
+        HTTPException
+            Fetching the commands failed.
+
+        Returns
+        --------
+        List[Union[:class:`SlashCommand`, :class:`UserCommand`, :class:`MessageCommand`]]
+            The list of application commands that are available in the guild.
+        """
+        state = self._state
+        data = await state.http.guild_application_command_index(self.id)
+        cmds = data['application_commands']
+        apps = {int(app['id']): state.create_integration_application(app) for app in data.get('applications') or []}
+
+        result = []
+        for cmd in cmds:
+            _, cls = _command_factory(cmd['type'])
+            application = apps.get(int(cmd['application_id']))
+            result.append(cls(state=state, data=cmd, application=application))
+        return result
 
     async def fetch_stickers(self) -> List[GuildSticker]:
         r"""|coro|
